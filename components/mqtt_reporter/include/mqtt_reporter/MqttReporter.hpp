@@ -54,6 +54,9 @@ private:
     void Run();
     void StartClient();
     void StopClient();
+    // 启动前的域名解析预检（mDNS 的 .local 在刚关联 AP 时常常首轮无应答，
+    // 直接让 esp-mqtt 去连会刷一条 7 秒超时报错；这里先带重试解析到 IP 再启动）
+    bool WaitForBrokerResolved(const std::string& host);
     void OnMqttConnected();
     void PublishStatus(const char* state);
     void PublishInfo();

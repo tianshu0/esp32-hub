@@ -2,8 +2,9 @@
 # 固定目标芯片，避免换机器构建时误用 esp32 默认目标
 CONFIG_IDF_TARGET="esp32c3"
 
-# 增大主任务栈，容纳 C++/组件初始化（BLE + MQTT + LVGL）
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# 主任务只做初始化装配，BLE/MQTT/LVGL 的常驻负载都在各组件自己的任务里，
+# C3 可用堆很小，没必要留到 8KB
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
 
 # 自定义分区表（4MB 方案，见 partitions.csv）
 CONFIG_PARTITION_TABLE_CUSTOM=y
@@ -30,3 +31,22 @@ CONFIG_BT_NIMBLE_MAX_CONNECTIONS=4
 # 关闭 Wi-Fi 的 IRAM 优化，把收发路径代码放回 Flash，换取 IRAM 空间
 CONFIG_ESP_WIFI_IRAM_OPT=n
 CONFIG_ESP_WIFI_RX_IRAM_OPT=n
+
+# ============ 内存：C3 无 PSRAM，可用堆仅约 188KB ============
+# 常驻占用：Wi-Fi + NimBLE + LVGL(内存池+显示缓冲) 很容易把堆压到只剩几 KB，
+# 届时各组件 xTaskCreate 会因取不到任务栈而静默失败（wifi_mgr / display /
+# mqtt_reporter / ble_central 全都不运行）。以下为压缩后的取值。
+
+# LVGL 用内置内存池（LV_USE_BUILTIN_MALLOC），lv_init() 一次性向堆申请 LV_MEM_SIZE。
+# 本工程 UI 只有两屏约 30 个对象，24KB 足够（默认 64KB 对 C3 太大）。
+CONFIG_LV_MEM_SIZE_KILOBYTES=24
+
+# Wi-Fi 收发缓冲（默认值面向带 PSRAM 的芯片）
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_MGMT_SBUF_NUM=16
+
+# NimBLE 数据缓冲池：hub 只做 Central 且单条报文很小，块数减半
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=8
+CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=12

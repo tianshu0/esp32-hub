@@ -21,6 +21,7 @@
 #include "esp_event.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
+#include "esp_system.h"
 #include "host/ble_hs.h"
 #include "host/ble_uuid.h"
 #include "host/util/util.h"
@@ -84,10 +85,16 @@ esp_err_t BleCentral::Init(AppConfig* config, NodeRegistry* registry, SensorPipe
     if (err != ESP_OK) return err;
 
     // 启动 NimBLE host 事件循环（nimble_port_init 已在 main 中调用）
+    // 注意：IDF 5.5 中该函数返回 void，内部 host 任务创建失败无法在此感知，
+    // 只能依赖下方 ble_central 任务与启动日志中的剩余堆来判断内存是否够用。
     nimble_port_freertos_init(&BleCentral::HostTask);
 
     // 启动自身状态机任务（组件自包含生命周期）
-    xTaskCreate(&BleCentral::TaskMain, "ble_central", 6144, this, 6, &task_);
+    // 任务栈不足时 xTaskCreate 只返回错误、不打印日志，必须显式检查
+    if (xTaskCreate(&BleCentral::TaskMain, "ble_central", 6144, this, 6, &task_) != pdPASS) {
+        ESP_LOGE(TAG, "create ble_central task failed, free heap %u B",
+                 (unsigned)esp_get_free_heap_size());
+    }
     ESP_LOGI(TAG, "ble central initialized");
     return ESP_OK;
 }

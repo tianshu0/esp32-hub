@@ -13,6 +13,9 @@
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
+#include "esp_system.h"
+#include "lwip/netdb.h"
+#include "lwip/sockets.h"
 
 namespace esp32hub {
 
@@ -53,7 +56,11 @@ esp_err_t MqttReporter::Init(AppConfig* config, NodeRegistry* registry)
     registered_handlers_ = true;
 
     // 启动自身状态机任务（内部 xTaskCreate）
-    xTaskCreate(&MqttReporter::TaskMain, "mqtt_reporter", 6144, this, 5, &task_);
+    // 任务栈不足时 xTaskCreate 只返回错误、不打印日志，必须显式检查
+    if (xTaskCreate(&MqttReporter::TaskMain, "mqtt_reporter", 6144, this, 5, &task_) != pdPASS) {
+        ESP_LOGE(TAG, "create mqtt_reporter task failed, free heap %u B",
+                 (unsigned)esp_get_free_heap_size());
+    }
     ESP_LOGI(TAG, "mqtt reporter initialized");
     return ESP_OK;
 }
@@ -103,6 +110,11 @@ void MqttReporter::StartClient()
 
     const std::string& host = config_->BrokerHost();
     uint16_t port = config_->BrokerPort();
+
+    // 先把 broker 域名解析出来再启动客户端，避免 esp-mqtt 首连撞上 mDNS 冷启动，
+    // 在错误日志里刷一条 7 秒超时（本函数运行在 mqtt_reporter 任务内，阻塞安全）。
+    WaitForBrokerResolved(host);
+
     char uri[96];
     std::snprintf(uri, sizeof(uri), "mqtt://%s:%u", host.c_str(), port);
 
@@ -155,8 +167,43 @@ void MqttReporter::StopClient()
     connected_ = false;
 }
 
-// ================ MQTT 事件回调 ================
+bool MqttReporter::WaitForBrokerResolved(const std::string& host)
+{
+    // 刚拿到 IP 时本机 IGMP 组播组刚加入、家用路由器的 mDNS snooping/代理
+    // 往往还没就绪，首轮 .local 查询常无应答（lwIP 等满超时返回 EAI_FAIL=202）。
+    // 先给 2 秒稳定窗口再开始查，实测可让首轮查询直接命中。
+    vTaskDelay(pdMS_TO_TICKS(2000));
 
+    constexpr int kMaxAttempts = 6;
+    for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
+        struct addrinfo hints = {};
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        struct addrinfo* res = nullptr;
+        int rc = getaddrinfo(host.c_str(), nullptr, &hints, &res);
+        if (rc == 0 && res != nullptr) {
+            auto* sa = reinterpret_cast<struct sockaddr_in*>(res->ai_addr);
+            ESP_LOGI(TAG, "broker %s resolved -> %s (attempt %d/%d)",
+                     host.c_str(), inet_ntoa(sa->sin_addr), attempt, kMaxAttempts);
+            freeaddrinfo(res);
+            return true;
+        }
+        ESP_LOGW(TAG, "resolve %s attempt %d/%d failed (eai=%d), retry in 2s",
+                 host.c_str(), attempt, kMaxAttempts, rc);
+        if (res != nullptr) {
+            freeaddrinfo(res);
+        }
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+
+    // 始终解析不出来也放行：esp-mqtt 自身会不断重连，待 mDNS/DNS 恢复后自动连上，
+    // 不在启动阶段把自己卡死（broker 也可能被用户配成纯 IP，此时首轮即应成功）。
+    ESP_LOGW(TAG, "broker %s not resolvable yet, mqtt will keep retrying in background",
+             host.c_str());
+    return false;
+}
+
+// ================ MQTT 事件回调 ================
 void MqttReporter::MqttEventHandler(void* arg, esp_event_base_t /*base*/, int32_t id, void* data)
 {
     MqttReporter* self = static_cast<MqttReporter*>(arg);

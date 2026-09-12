@@ -21,6 +21,7 @@
 #include "driver/spi_master.h"
 #include "esp_lvgl_port.h"
 #include "esp_timer.h"
+#include "esp_system.h"
 #include "app_config/AppConfig.hpp"
 #include <cstdio>
 #include <cstring>
@@ -55,7 +56,7 @@ esp_err_t DisplayService::Init(const Pins& pins)
     buscfg.sclk_io_num = pins.sclk;
     buscfg.quadwp_io_num = -1;
     buscfg.quadhd_io_num = -1;
-    buscfg.max_transfer_sz = kWidth * 40 * sizeof(uint16_t); // LVGL 分区缓冲大小
+    buscfg.max_transfer_sz = kWidth * 20 * sizeof(uint16_t); // 横屏一次刷 20 行：296*20*2=11840 B
 
     esp_err_t err = spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO);
     if (err != ESP_OK) {
@@ -106,16 +107,22 @@ esp_err_t DisplayService::Init(const Pins& pins)
     // 4. 复位 + 初始化 + 方向校正
     esp_lcd_panel_reset(panel_);
     esp_lcd_panel_init(panel_);
-    // JD9853 的 GRAM 是 240x320，本模组可视区只有 240x296：
-    // 沿 Y 轴偏移 24 行，让写入的 240x296 落在可视区内。
-    // 若换模组后发现画面上下偏移 24 行，把下面的 mirror_y 改成 true 即可把偏移换到另一端。
-    esp_lcd_panel_set_gap(panel_, 0, 24);
+    // JD9853 的 GRAM 是 240x320，本模组可视区 240x296：
+    // 实测可视区从 GRAM 第 0 行开始（320-296=24 行死区在底部），gap 必须为 (0,0)。
+    // 若误设 y_gap=24，画面会整体下移 24 行：顶部可视区读到从未写入的 GRAM，
+    // 表现为屏幕顶部一条约 24 行高、随圆角弯曲的雪花噪点带，底部 uptime 被裁掉。
+    // 横屏（MV=1）后逻辑 X 轴映射到 GRAM 行：逻辑 x 取 0~295 正好落在可见行 0~295，
+    // 24 行死区仍在末端、不写入，所以 gap 维持 (0,0) 即可。
+    esp_lcd_panel_set_gap(panel_, 0, 0);
     // JD9853 IPS 模组需要反色。
-    // 竖屏（240 宽 x 296 高）对应 swap_xy=false / mirror_x=false / mirror_y=false；
-    // 若换屏后方向不对，再调整 mirror_x/mirror_y/swap_xy 即可。
+    // 横屏 296x240 = MADCTL 置 MV(行列交换) + MX(水平镜像)，即顺时针 90°。
+    // 这是唯一的旋转手段：esp_lvgl_port 保持 ROTATION_0，LVGL 逻辑分辨率直接给
+    // 296x240，flush 坐标不做任何二次变换（与官方 esp_lcd st7789 驱动的用法一致：
+    // MV=1 后 CASET 寻址长轴 0~319、RASET 寻址短轴 0~239，驱动里无需交换窗口）。
+    // 若实物装壳方向相反、画面上下颠倒：把下面改成 swap_xy(true) + mirror(false,true)。
     esp_lcd_panel_invert_color(panel_, true);
-    esp_lcd_panel_swap_xy(panel_, false);
-    esp_lcd_panel_mirror(panel_, false, false);
+    esp_lcd_panel_swap_xy(panel_, true);
+    esp_lcd_panel_mirror(panel_, true, false);
     esp_lcd_panel_disp_on_off(panel_, true);
 
     // 5. 背光（若接了 BLK 引脚）
@@ -138,24 +145,27 @@ esp_err_t DisplayService::Init(const Pins& pins)
         return err;
     }
 
-    // 7. 向 LVGL 注册显示设备：缓冲按 40 行分区（buffer_size 单位为像素），
+    // 7. 向 LVGL 注册显示设备：缓冲按 20 行分区（buffer_size 单位为像素），
     //    移植层负责 flush 与 DMA 完成同步。
+    //    横屏双缓冲 2 × 296×20×2 = 23680 B；C3 无 PSRAM，堆紧张，
+    //    不能再用整屏缓冲，20 行分区实测流畅度足够。
     //    color_format=RGB565 与面板的 16bpp 一致。
     //    swap_bytes 必须开启：LVGL 的 RGB565 按小端存放，JD9853 要求高字节先传，
     //    不交换时深蓝背景会显示成黄绿、文字抗锯齿像素错位成彩色花边（发虚模糊）。
     lvgl_port_display_cfg_t disp_cfg = {};
     disp_cfg.io_handle = io_handle;
     disp_cfg.panel_handle = panel_;
-    disp_cfg.buffer_size = kWidth * 40; // 像素数（非字节）
+    disp_cfg.buffer_size = kWidth * 20; // 像素数（非字节）
     disp_cfg.double_buffer = true;
-    disp_cfg.hres = kWidth;
-    disp_cfg.vres = kHeight;
+    disp_cfg.hres = kWidth;             // 296（横屏逻辑宽）
+    disp_cfg.vres = kHeight;            // 240（横屏逻辑高）
     disp_cfg.color_format = LV_COLOR_FORMAT_RGB565;
     disp_cfg.flags.buff_dma = true;     // 缓冲从 DMA 可访问内存分配
     disp_cfg.flags.swap_bytes = true;   // RGB565 高低字节交换（JD9853 大端接收）
-    // rotation 需与上方 esp_lcd_panel_swap_xy/mirror 的硬件状态保持一致
-    disp_cfg.rotation.swap_xy = false;
-    disp_cfg.rotation.mirror_x = false;
+    // 硬件旋转 90°（CW）：必须与上方 esp_lcd_panel_swap_xy/mirror 的设置一致；
+    // esp_lvgl_port 在 ROTATION_0 下只会把这两个值原样下发给面板驱动。
+    disp_cfg.rotation.swap_xy = true;
+    disp_cfg.rotation.mirror_x = true;
     disp_cfg.rotation.mirror_y = false;
 
     lvgl_disp_ = lvgl_port_add_disp(&disp_cfg);
@@ -186,7 +196,11 @@ void DisplayService::Start()
     BuildScreens();
     lvgl_port_unlock();
 
-    xTaskCreate(&DisplayService::TaskMain, "display", 6144, this, 5, &task_);
+    // 任务栈不足时 xTaskCreate 只返回错误、不打印日志，必须显式检查
+    if (xTaskCreate(&DisplayService::TaskMain, "display", 6144, this, 5, &task_) != pdPASS) {
+        ESP_LOGE(TAG, "create display task failed, free heap %u B",
+                 (unsigned)esp_get_free_heap_size());
+    }
 }
 
 void DisplayService::TaskMain(void* arg)
@@ -265,13 +279,16 @@ void DisplayService::BuildScreens()
 
 void DisplayService::BuildStatusScreen(lv_obj_t* scr)
 {
-    // 标题栏
-    MakeLabel(scr, 8, 6, "esp32-hub", kColorCyan, &lv_font_montserrat_24);
+    // 圆角安全区：四角圆角半径约 26px，贴边元素统一内缩 30px 起步；
+    // y 方向内容只使用 40~214 这段（240 高），页脚水平居中落在底边平直段内。
 
-    // 在线徽章
+    // 标题栏（内缩 30px 避开左上圆角弧）
+    MakeLabel(scr, 30, 8, "esp32-hub", kColorCyan, &lv_font_montserrat_24);
+
+    // 在线徽章（右上角同样内缩；66 宽可容下 "ONLINE"）
     badge_ = lv_obj_create(scr);
-    lv_obj_set_pos(badge_, 168, 10);
-    lv_obj_set_size(badge_, 64, 22);
+    lv_obj_set_pos(badge_, 200, 10);
+    lv_obj_set_size(badge_, 66, 22);
     lv_obj_set_style_radius(badge_, 11, 0);
     lv_obj_set_style_bg_color(badge_, lv_color_hex(kColorAmberBg), 0);
     lv_obj_set_style_bg_opa(badge_, LV_OPA_COVER, 0);
@@ -283,7 +300,7 @@ void DisplayService::BuildStatusScreen(lv_obj_t* scr)
     lv_obj_center(badge_label_);
     lv_label_set_text(badge_label_, "BOOT");
 
-    // 分隔线
+    // 分隔线（y=40 已在圆角弧之外，可整宽绘制）
     lv_obj_t* line = lv_obj_create(scr);
     lv_obj_set_pos(line, 0, 40);
     lv_obj_set_size(line, kWidth, 2);
@@ -293,38 +310,48 @@ void DisplayService::BuildStatusScreen(lv_obj_t* scr)
     lv_obj_set_style_pad_all(line, 0, 0);
     lv_obj_remove_flag(line, LV_OBJ_FLAG_SCROLLABLE);
 
-    // 中继 ID 卡片
-    MakeLabel(scr, 12, 56, "RELAY ID", kColorMuted, &lv_font_montserrat_16);
-    relay_id_lbl_ = MakeLabel(scr, 12, 78, "—", kColorWhite, &lv_font_montserrat_24);
+    // 左卡片：RELAY ID + WIFI + MQTT（x=8 起，宽 140；y=48 高 158，止于 206）
+    lv_obj_t* left = MakeCard(scr, 8, 48, 140, 158);
+    MakeLabel(left, 12, 6,   "RELAY ID", kColorMuted, &lv_font_montserrat_16);
+    relay_id_lbl_ = MakeLabel(left, 12, 24, "-", kColorWhite, &lv_font_montserrat_24);
 
-    // Wi-Fi IP 卡片
-    MakeLabel(scr, 130, 56, "WIFI", kColorMuted, &lv_font_montserrat_16);
-    ip_value_ = MakeLabel(scr, 130, 78, "—", kColorWhite, &lv_font_montserrat_24);
+    MakeLabel(left, 12, 62, "WIFI", kColorMuted, &lv_font_montserrat_16);
+    ip_value_ = MakeLabel(left, 12, 82, "-", kColorWhite, &lv_font_montserrat_16);
+    lv_obj_set_width(ip_value_, 116);
+    lv_label_set_long_mode(ip_value_, LV_LABEL_LONG_CLIP);
 
-    // MQTT 状态卡片
-    MakeLabel(scr, 12, 132, "MQTT", kColorMuted, &lv_font_montserrat_16);
-    mqtt_state_ = MakeLabel(scr, 12, 154, "—", kColorWhite, &lv_font_montserrat_24);
+    MakeLabel(left, 12, 108, "MQTT", kColorMuted, &lv_font_montserrat_16);
+    mqtt_state_ = MakeLabel(left, 12, 126, "-", kColorWhite, &lv_font_montserrat_24);
 
-    // 节点数卡片
-    MakeLabel(scr, 130, 132, "NODES", kColorMuted, &lv_font_montserrat_16);
-    node_count_ = MakeLabel(scr, 130, 154, "—", kColorWhite, &lv_font_montserrat_24);
+    // 右卡片：NODES（x=156 起，宽 132）
+    lv_obj_t* right = MakeCard(scr, 156, 48, 132, 158);
+    MakeLabel(right, 12, 40, "NODES", kColorMuted, &lv_font_montserrat_16);
+    node_count_ = MakeLabel(right, 12, 60, "-", kColorWhite, &lv_font_montserrat_24);
+    MakeLabel(right, 12, 100, "paired", kColorMuted, &lv_font_montserrat_16);
 
-    // 运行时长（页脚，296 高屏底部预留 16px 内边距）
-    uptime_label_ = MakeLabel(scr, 8, 266, "uptime 00:00:00", kColorMuted, &lv_font_montserrat_16);
+    // 运行时长：相对屏幕底边水平居中（文字只占底部平直段，不进左右圆角弧）
+    uptime_label_ = MakeLabel(scr, 0, 0, "uptime 00:00:00", kColorMuted, &lv_font_montserrat_16);
+    lv_obj_align(uptime_label_, LV_ALIGN_BOTTOM_MID, 0, -6);
 }
 
 void DisplayService::BuildNodesScreen(lv_obj_t* scr)
 {
-    MakeLabel(scr, 8, 6, "Paired Nodes", kColorCyan, &lv_font_montserrat_24);
+    // 标题同样内缩 30px 避开左上圆角
+    MakeLabel(scr, 30, 8, "Paired Nodes", kColorCyan, &lv_font_montserrat_24);
 
-    // 4 个节点行：每行 56 像素高、间隔 62（296 高屏放得下 4 行）
+    // 2x2 卡片网格：卡片 (8,152) 宽 136、高 78；末排底边 48+78+80=206，在圆角弧之外
+    static const int kCardW = 136;
+    static const int kCardH = 78;
     for (int i = 0; i < kMaxNodesShown; ++i) {
-        int y = 42 + i * 62;
-        lv_obj_t* row = MakeCard(scr, 8, y, kWidth - 16, 56);
-        node_rows_[i] = row;
-        node_ids_[i]   = MakeLabel(row, 10, 6,  "—", kColorWhite, &lv_font_montserrat_16);
-        node_types_[i] = MakeLabel(row, 10, 26, "—", kColorMuted,  &lv_font_montserrat_16);
-        node_ages_[i]  = MakeLabel(row, 10, 42, "—", kColorMuted,  &lv_font_montserrat_16);
+        int col = i % 2;
+        int row = i / 2;
+        int x = 8 + col * 144;
+        int y = 48 + row * 80;
+        lv_obj_t* card = MakeCard(scr, x, y, kCardW, kCardH);
+        node_rows_[i] = card;
+        node_ids_[i]   = MakeLabel(card, 10, 4,  "-", kColorWhite, &lv_font_montserrat_16);
+        node_types_[i] = MakeLabel(card, 10, 28, "-", kColorMuted,  &lv_font_montserrat_16);
+        node_ages_[i]  = MakeLabel(card, 10, 50, "-", kColorMuted,  &lv_font_montserrat_16);
     }
 }
 
@@ -383,12 +410,12 @@ void DisplayService::Render()
 
     // Wi-Fi IP
     std::string ip = wifi_ ? wifi_->CurrentIp() : std::string();
-    if (ip.empty()) ip = wifi_ ? wifi_->ApSsid() : std::string("—");
+    if (ip.empty()) ip = wifi_ ? wifi_->ApSsid() : std::string("-");
     if (ip_value_) lv_label_set_text(ip_value_, ip.c_str());
 
     // MQTT 状态
     if (mqtt_state_) {
-        lv_label_set_text(mqtt_state_, mqtt_online ? "ONLINE" : (wifi_online ? "OFF" : "—"));
+        lv_label_set_text(mqtt_state_, mqtt_online ? "ONLINE" : (wifi_online ? "OFF" : "-"));
         lv_obj_set_style_text_color(mqtt_state_,
                                     lv_color_hex(mqtt_online ? kColorGreen : kColorRed), 0);
     }
@@ -428,7 +455,7 @@ void DisplayService::Render()
                     lv_label_set_text(node_ages_[i], buf);
                 }
             } else {
-                if (node_ids_[i])   lv_label_set_text(node_ids_[i],   "—");
+                if (node_ids_[i])   lv_label_set_text(node_ids_[i],   "-");
                 if (node_types_[i]) lv_label_set_text(node_types_[i], "");
                 if (node_ages_[i])  lv_label_set_text(node_ages_[i],  "");
             }

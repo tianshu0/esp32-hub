@@ -12,6 +12,7 @@
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "nimble/nimble_port.h"
 
 #include "app_config/AppConfig.hpp"
@@ -29,18 +30,20 @@ static const char* TAG = "esp32-hub";
 
 extern "C" void app_main(void)
 {
-    // 注意：NVS 初始化（含损坏擦除自愈）由 AppConfig::Init() 统一完成，
-    // 这里不再裸调 nvs_flash_init()，否则分区表变动后旧数据会直接 abort。
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-
-    // NimBLE 协议栈初始化（host 必须先于 ble_central 启动）
-    ESP_ERROR_CHECK(nimble_port_init());
 
     // 以下组件均以 static 存在：内部创建了任务/注册了事件回调，
     // 若作为栈对象在 app_main 返回时析构会造成悬挂指针，故常驻到系统重启。
     static AppConfig config;        // 配置存储（NVS 读写，内部初始化 NVS）
+    // NVS 必须先于 BT/Wi-Fi 初始化：phy 校准数据的读写要走 NVS，否则会报
+    // "esp_phy_load_cal_data_from_nvs: NVS has not been initialized" 并退回全量校准。
+    // 注意：NVS 初始化（含损坏擦除自愈）由 AppConfig::Init() 统一完成，
+    // 这里不再裸调 nvs_flash_init()，否则分区表变动后旧数据会直接 abort。
     ESP_ERROR_CHECK(config.Init());
+
+    // NimBLE 协议栈初始化（host 必须先于 ble_central 启动）
+    ESP_ERROR_CHECK(nimble_port_init());
 
     static NodeRegistry registry;    // 已配对节点表（持久化 + RelayId 生成）
     ESP_ERROR_CHECK(registry.Init(&config));
@@ -73,5 +76,9 @@ extern "C" void app_main(void)
     display.Bind(&wifi, &ble, &reporter, &registry);
     display.Start();
 
-    ESP_LOGI(TAG, "esp32-hub started");
+    // 打印剩余堆：本工程 Wi-Fi + NimBLE + LVGL 常驻占用很大，
+    // 这两个数字用于确认各组件任务（xTaskCreate）是否还有足够栈空间
+    ESP_LOGI(TAG, "esp32-hub started (free heap %u B, min free %u B)",
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)esp_get_minimum_free_heap_size());
 }

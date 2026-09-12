@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include "esp_log.h"
 #include "esp_wifi.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 
 namespace esp32hub {
@@ -102,8 +103,13 @@ esp_err_t PortalServer::StartDns(esp_netif_t* ap_netif)
     if (dns_running_) {
         return ESP_OK;
     }
+    // 任务栈不足时 xTaskCreate 只返回错误、不打印日志，必须显式检查
+    if (xTaskCreate(&PortalServer::DnsTask, "portal_dns", 4096, this, 5, &dns_task_) != pdPASS) {
+        ESP_LOGE(TAG, "create portal_dns task failed, free heap %u B",
+                 (unsigned)esp_get_free_heap_size());
+        return ESP_ERR_NO_MEM;
+    }
     dns_running_ = true;
-    xTaskCreate(&PortalServer::DnsTask, "portal_dns", 4096, this, 5, &dns_task_);
     ESP_LOGI(TAG, "DNS hijack started (all domains -> AP IP)");
     return ESP_OK;
 }

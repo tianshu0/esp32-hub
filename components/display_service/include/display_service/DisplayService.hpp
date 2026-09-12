@@ -53,8 +53,12 @@ public:
     // 构建两块 LVGL 屏幕（状态页 + 节点列表页）并启动渲染任务（内部 xTaskCreate）
     void Start();
 
-    static constexpr int kWidth  = 240;
-    static constexpr int kHeight = 296;
+    // 逻辑分辨率（横屏）：面板原生 GRAM 为 240x320、可视区 240x296，
+    // 通过 JD9853 的 MADCTL MV 位做 90° 硬件旋转，LVGL 侧直接按 296x240 布局。
+    // 横屏理由：模组四角为大圆角（半径约 26px），竖屏时四角元素（标题/徽章/页脚）
+    // 会被圆角遮罩裁掉；横屏后宽 296、高仅 240，内容可沿长边内缩避开圆角。
+    static constexpr int kWidth  = 296;
+    static constexpr int kHeight = 240;
 
 private:
     static void TaskMain(void* arg);
