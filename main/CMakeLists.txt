@@ -1,0 +1,19 @@
+# main 组件：仅做装配与系统级初始化
+idf_component_register(
+    SRCS
+        "main.cpp"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        app_config
+        wifi_provider
+        display_service
+        ble_central
+        node_registry
+        sensor_pipeline
+        mqtt_reporter
+        esp_netif
+        esp_event
+        log
+        bt
+)

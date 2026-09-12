@@ -1,0 +1,21 @@
+# display_service 组件：JD9853 SPI 屏驱动（2.01" 240x296）+ LVGL UI（状态页 + 节点列表页）
+idf_component_register(
+    SRCS
+        "DisplayService.cpp"
+        "esp_lcd_jd9853.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        app_config
+        wifi_provider
+        ble_central
+        node_registry
+        mqtt_reporter
+        esp_lcd
+        driver
+        esp_common
+        freertos
+        esp_timer
+        lvgl
+        esp_lvgl_port
+)

@@ -1,0 +1,18 @@
+# ESP-IDF 构建产物
+build/
+managed_components/
+dependencies.lock
+sdkconfig
+sdkconfig.old
+sdkconfig.defaults.old
+
+# 编译诊断日志
+*.log
+
+# 编辑器/系统
+.vscode/
+.idea/
+.cache/
+*.swp
+.DS_Store
+build_*

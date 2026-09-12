@@ -1,0 +1,20 @@
+# wifi_provider：STA 连接管理 + SoftAP Captive Portal 配网
+idf_component_register(
+    SRCS
+        "WifiManager.cpp"
+        "PortalServer.cpp"
+    INCLUDE_DIRS
+        "include"
+    EMBED_FILES
+        "portal.html"
+    REQUIRES
+        app_config
+        esp_wifi
+        esp_netif
+        esp_event
+        esp_http_server
+        esp_hw_support
+        esp_timer
+        lwip
+        log
+)

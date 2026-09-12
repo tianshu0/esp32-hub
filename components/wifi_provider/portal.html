@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>esp32-hub 配网</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: linear-gradient(160deg, #0f2027, #203a43, #2c5364);
+    min-height: 100vh;
+    color: #e2e8f0;
+  }
+  .wrap { padding: 24px 16px 40px; display: flex; flex-direction: column; align-items: center; }
+  .card {
+    width: 100%;
+    max-width: 460px;
+    background: #ffffff;
+    border-radius: 18px;
+    padding: 24px 20px;
+    box-shadow: 0 12px 32px rgba(0,0,0,.25);
+    color: #22303c;
+  }
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  .sub { margin: 0 0 18px; color: #5a7184; font-size: 13px; min-height: 18px; }
+  label { display:block; font-size: 13px; color: #2c5364; margin: 12px 0 4px; }
+  input[type=text], input[type=password] {
+    width: 100%; padding: 10px 12px; font-size: 15px;
+    border: 1px solid #cbd5e0; border-radius: 8px; outline: none;
+  }
+  input:focus { border-color: #2c5364; }
+  .btn {
+    margin-top: 18px; width: 100%; padding: 12px;
+    background: #2c5364; color: #fff; font-size: 15px;
+    border: 0; border-radius: 10px; cursor: pointer;
+  }
+  .btn:active { background: #1a3440; }
+  .scan { margin-top: 14px; font-size: 13px; color: #5a7184; }
+  .ap { padding: 8px 10px; border: 1px solid #cbd5e0; border-radius: 8px; margin: 6px 0; cursor: pointer; }
+  .ap:hover { background: #f1f5f9; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>esp32-hub 配网</h1>
+    <p class="sub" id="status">扫描附近 Wi-Fi 或手动输入</p>
+    <label for="ssid">SSID</label>
+    <input id="ssid" type="text" placeholder="Wi-Fi 名称" autocomplete="off">
+    <label for="password">密码</label>
+    <input id="password" type="password" placeholder="Wi-Fi 密码">
+    <button class="btn" id="save">保存并连接</button>
+    <div class="scan" id="apList">点击下方按钮扫描附近 Wi-Fi</div>
+    <button class="btn" id="scanBtn" style="background:#4a5568;margin-top:8px;">扫描</button>
+  </div>
+</div>
+<script>
+  const $ = (s) => document.querySelector(s);
+  const ssid = $('#ssid'), pwd = $('#password'), status = $('#status'),
+        apList = $('#apList'), saveBtn = $('#save'), scanBtn = $('#scanBtn');
+
+  async function post(url, body) {
+    const r = await fetch(url, { method: 'POST', body });
+    return r.text();
+  }
+
+  saveBtn.addEventListener('click', async () => {
+    if (!ssid.value) { status.textContent = '请输入 SSID'; return; }
+    status.textContent = '保存中...';
+    const res = await post('/save', `ssid=${encodeURIComponent(ssid.value)}&password=${encodeURIComponent(pwd.value)}`);
+    status.textContent = res || '已保存，设备将重启';
+  });
+
+  scanBtn.addEventListener('click', async () => {
+    apList.textContent = '扫描中...';
+    const res = await fetch('/scan').then(r => r.json()).catch(() => []);
+    apList.innerHTML = '';
+    if (!res.length) { apList.textContent = '未找到 Wi-Fi'; return; }
+    res.forEach(ap => {
+      const el = document.createElement('div');
+      el.className = 'ap';
+      el.textContent = `${ap.ssid} (${ap.rssi}dBm${ap.auth ? ', 加密' : ''})`;
+      el.addEventListener('click', () => { ssid.value = ap.ssid; pwd.focus(); });
+      apList.appendChild(el);
+    });
+  });
+
+  // 自动扫描一次
+  scanBtn.click();
+</script>
+</body>
+</html>

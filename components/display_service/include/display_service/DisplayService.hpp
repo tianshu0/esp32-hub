@@ -1,0 +1,97 @@
+// display_service 组件：JD9853 SPI 屏驱动（2.01" 240x296）+ LVGL UI（状态页 / 节点列表页）
+//
+// 与 esp32-broker 的差异：
+//   - 把 Display（硬件）+ StatusUi（UI）合并为单一组件，避免文件爆炸
+//   - 不再注入 Broker 指针，改为注入 MqttReporter（hub 是 MQTT 客户端）
+//   - 第二屏从「配网页」改为「节点列表页」（配网由 wifi_provider 的 portal.html 完成）
+//
+// 数据流：
+//   DisplayService 通过 getter 读取 WifiManager/BleCentral/MqttReporter/NodeRegistry 状态，
+//   每 1 秒切屏并刷新文本/颜色。BLE/MQTT 数据变化由各自组件直接写 registry，这里只读取。
+#pragma once
+
+#include <cstdint>
+#include "esp_err.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_panel_vendor.h"
+#include "esp_lcd_panel_ops.h"
+#include "lvgl.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+namespace esp32hub {
+
+class WifiManager;
+class BleCentral;
+class MqttReporter;
+class NodeRegistry;
+
+class DisplayService {
+public:
+    // 2.01" TFT（JD9853）SPI 接线：VCC GND SCL SDA RES DC CS BLK
+    //
+    // 引脚按 ESP32-C3 模组可用 GPIO 分配，ESP32-C3 Super Mini 等板子可直接照此接线：
+    //   - 6/7/10 是 C3 的 FSPI IOMUX 默认脚（CLK/MOSI/CS0），走硬件映射才能跑高时钟
+    //   - 避开 strapping 脚(2/8/9)、USB Serial/JTAG(18/19)、UART0 控制台(20/21)、
+    //     片内 Flash(11~17)
+    struct Pins {
+        int mosi = 7;  // SDA
+        int sclk = 6;  // SCL
+        int cs   = 10;
+        int dc   = 4;
+        int rst  = 5;
+        // BLK 背光：高电平点亮。若硬件直接把 BLK 接 3.3V 常亮，可设为 -1 不软件控制。
+        int bl   = 3;
+    };
+
+    // 初始化 SPI 总线 + JD9853 面板 + LVGL（esp_lvgl_port）
+    esp_err_t Init(const Pins& pins);
+
+    // 绑定状态来源（必须在 Start 前调用，使 Render 能读到实时状态）
+    void Bind(WifiManager* wifi, BleCentral* ble, MqttReporter* reporter, NodeRegistry* registry);
+
+    // 构建两块 LVGL 屏幕（状态页 + 节点列表页）并启动渲染任务（内部 xTaskCreate）
+    void Start();
+
+    static constexpr int kWidth  = 240;
+    static constexpr int kHeight = 296;
+
+private:
+    static void TaskMain(void* arg);
+    void Run();
+    void BuildScreens();
+    void BuildStatusScreen(lv_obj_t* scr);    // 中继状态：Wi-Fi/MQTT/节点数
+    void BuildNodesScreen(lv_obj_t* scr);     // 已配对节点列表（最多 4 条）
+    void Render();                            // LVGL 锁内：切屏 + 更新动态数据
+
+    esp_lcd_panel_handle_t panel_ = nullptr;
+    lv_display_t* lvgl_disp_      = nullptr;
+
+    WifiManager* wifi_     = nullptr;
+    BleCentral*  ble_      = nullptr;
+    MqttReporter* reporter_ = nullptr;
+    NodeRegistry* registry_ = nullptr;
+    TaskHandle_t task_     = nullptr;
+
+    lv_obj_t* scr_status_ = nullptr;
+    lv_obj_t* scr_nodes_  = nullptr;
+    bool showing_nodes_   = false;
+
+    // 状态页动态控件
+    lv_obj_t* badge_         = nullptr;
+    lv_obj_t* badge_label_   = nullptr;
+    lv_obj_t* relay_id_lbl_  = nullptr;
+    lv_obj_t* ip_value_      = nullptr;
+    lv_obj_t* mqtt_state_    = nullptr;
+    lv_obj_t* node_count_    = nullptr;
+    lv_obj_t* uptime_label_  = nullptr;
+
+    // 节点列表页动态控件（最多 4 个节点）
+    static constexpr int kMaxNodesShown = 4;
+    lv_obj_t* node_rows_[kMaxNodesShown] = {};
+    lv_obj_t* node_ids_[kMaxNodesShown]  = {};
+    lv_obj_t* node_types_[kMaxNodesShown] = {};
+    lv_obj_t* node_ages_[kMaxNodesShown]  = {};
+};
+
+} // namespace esp32hub
