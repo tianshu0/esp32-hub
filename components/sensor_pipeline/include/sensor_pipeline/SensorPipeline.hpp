@@ -55,7 +55,9 @@ public:
     // 节点注册事件 payload（握手成功时由 ble_central 触发）
     struct NodeRegistered {
         char node_id[32];
-        char capability_json[192];  // 能力清单原文 {"types":[...]}
+        // 能力清单原文 hello_ack（含 types + 每传感器 format，实测约 290 字节；
+        // 此前 192 会把完整 JSON 截断导致下游解析出空能力清单）
+        char capability_json[384];
     };
 
     // 提交数据（ble_central 收到 NOTIFY 后调用）

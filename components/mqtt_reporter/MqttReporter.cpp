@@ -233,6 +233,17 @@ void MqttReporter::OnMqttConnected()
     // 连接成功后立即发布在线状态与中继信息
     PublishStatus("online");
     PublishInfo();
+
+    // 补发已配对节点的 retained register。
+    // 原因：握手（BLE）与 MQTT 连接是两条独立时间线，节点常在 MQTT 上线前就完成
+    // 配对，当时的 register 事件只能丢弃；broker/PC 端后上线时也需要 retained 消息
+    // 才能重建节点卡片。因此每次 MQTT 连上都把持久化的节点能力清单重发一遍。
+    for (int i = 0; i < registry_->Count(); ++i) {
+        NodeRegistry::NodeInfo info = registry_->GetByIndex(i);
+        if (!info.node_id.empty() && !info.capability.empty()) {
+            PublishNodeRegisterRaw(info.node_id.c_str(), info.capability.c_str());
+        }
+    }
 }
 
 // ================ 发布接口 ================
@@ -277,26 +288,31 @@ void MqttReporter::PublishSensorData(const SensorPipeline::SensorData& data)
                   static_cast<long long>(data.ts),
                   data.values_json[0] ? data.values_json : "{}");
     esp_mqtt_client_publish(client_, topic, payload, 0, 0, 0);
-    ESP_LOGD(TAG, "published %s = %s", topic, payload);
+    ESP_LOGI(TAG, "published %s = %s", topic, payload);
+}
+
+void MqttReporter::PublishNodeRegisterRaw(const char* node_id, const char* capability_json)
+{
+    if (client_ == nullptr || !connected_) {
+        ESP_LOGW(TAG, "mqtt not connected, drop register for %s", node_id);
+        return;
+    }
+    char topic[128];
+    char payload[512];
+    std::snprintf(topic, sizeof(topic), "hub/%s/node/%s/register",
+                  registry_->RelayId(), node_id);
+    std::snprintf(payload, sizeof(payload),
+                  "{\"relay_id\":\"%s\",\"node_id\":\"%s\",\"capability\":%s}",
+                  registry_->RelayId(), node_id,
+                  (capability_json && capability_json[0]) ? capability_json : "{}");
+    // register 用 retained：PC 端后连接也能拿到节点能力
+    esp_mqtt_client_publish(client_, topic, payload, 0, 0, 1);
+    ESP_LOGI(TAG, "published %s = %s", topic, payload);
 }
 
 void MqttReporter::PublishNodeRegister(const SensorPipeline::NodeRegistered& reg)
 {
-    if (client_ == nullptr || !connected_) {
-        ESP_LOGW(TAG, "mqtt not connected, drop register for %s", reg.node_id);
-        return;
-    }
-    char topic[128];
-    char payload[384];
-    std::snprintf(topic, sizeof(topic), "hub/%s/node/%s/register",
-                  registry_->RelayId(), reg.node_id);
-    std::snprintf(payload, sizeof(payload),
-                  "{\"relay_id\":\"%s\",\"node_id\":\"%s\",\"capability\":%s}",
-                  registry_->RelayId(), reg.node_id,
-                  reg.capability_json[0] ? reg.capability_json : "{}");
-    // register 用 retained：PC 端后连接也能拿到节点能力
-    esp_mqtt_client_publish(client_, topic, payload, 0, 0, 1);
-    ESP_LOGI(TAG, "published %s = %s", topic, payload);
+    PublishNodeRegisterRaw(reg.node_id, reg.capability_json);
 }
 
 // ================ 传感器事件订阅 ================

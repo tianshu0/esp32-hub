@@ -24,6 +24,7 @@ public:
     struct NodeInfo {
         std::string node_id;          // 节点 ID（握手时由 node 上报）
         std::string sensor_summary;   // 传感器类型摘要（如 "temp_hum,pressure"）
+        std::string capability;       // 能力清单原文（hello_ack JSON，供 MQTT 重连后补发 register）
         int64_t last_seen_us = 0;     // 最后一次收到数据的时间
         bool online = false;          // 是否当前在线（BLE 连接中）
     };

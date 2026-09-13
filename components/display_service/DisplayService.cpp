@@ -1,13 +1,12 @@
-// DisplayService 实现：SPI 总线 + JD9853 面板 + LVGL(esp_lvgl_port) 显示 + 双屏 UI
+// DisplayService 实现：SPI 总线 + JD9853 面板 + LVGL(esp_lvgl_port) 显示 + 单屏 UI
 //
 // 面板硬件初始化沿用 esp_lcd（JD9853 驱动见同目录 esp_lcd_jd9853.c）；
 // LVGL 任务、绘制缓冲、flush 与 DMA 完成同步全部由 esp_lvgl_port 官方移植层处理
 // （内部注册 on_color_trans_done）。
 //
-// 双屏 UI：
-//   - 状态页：中继 ID、Wi-Fi 在线/IP、MQTT 状态、已配对节点数、运行时长
-//   - 节点列表页：每个节点一行（ID + 传感器类型 + 距上次数据时长）
-// 第一版 UI 用英文 + ASCII（Montserrat 16/24 即可），后续若加中文再加中文字体。
+// 当前只有一个状态页：中继 ID、Wi-Fi 在线/IP、MQTT 状态、已配对节点数、运行时长。
+// 节点详情/选择页暂不实现，后续接入物理按钮后由按钮事件手动切换。
+// UI 用英文 + ASCII（Montserrat 16/24 即可），后续若加中文再加中文字体。
 #include "display_service/DisplayService.hpp"
 #include "display_service/esp_lcd_jd9853.h"
 #include "wifi_provider/WifiManager.hpp"
@@ -191,7 +190,7 @@ void DisplayService::Bind(WifiManager* wifi, BleCentral* ble,
 
 void DisplayService::Start()
 {
-    // LVGL 锁内构建两块屏幕，避免渲染任务启动后并发竞争
+    // LVGL 锁内构建状态页，避免渲染任务启动后并发竞争
     lvgl_port_lock(0);
     BuildScreens();
     lvgl_port_unlock();
@@ -269,12 +268,7 @@ void DisplayService::BuildScreens()
     SetupScreenBg(scr_status_);
     BuildStatusScreen(scr_status_);
 
-    scr_nodes_ = lv_obj_create(nullptr);
-    SetupScreenBg(scr_nodes_);
-    BuildNodesScreen(scr_nodes_);
-
     lv_screen_load(scr_status_);
-    showing_nodes_ = false;
 }
 
 void DisplayService::BuildStatusScreen(lv_obj_t* scr)
@@ -334,47 +328,10 @@ void DisplayService::BuildStatusScreen(lv_obj_t* scr)
     lv_obj_align(uptime_label_, LV_ALIGN_BOTTOM_MID, 0, -6);
 }
 
-void DisplayService::BuildNodesScreen(lv_obj_t* scr)
-{
-    // 标题同样内缩 30px 避开左上圆角
-    MakeLabel(scr, 30, 8, "Paired Nodes", kColorCyan, &lv_font_montserrat_24);
-
-    // 2x2 卡片网格：卡片 (8,152) 宽 136、高 78；末排底边 48+78+80=206，在圆角弧之外
-    static const int kCardW = 136;
-    static const int kCardH = 78;
-    for (int i = 0; i < kMaxNodesShown; ++i) {
-        int col = i % 2;
-        int row = i / 2;
-        int x = 8 + col * 144;
-        int y = 48 + row * 80;
-        lv_obj_t* card = MakeCard(scr, x, y, kCardW, kCardH);
-        node_rows_[i] = card;
-        node_ids_[i]   = MakeLabel(card, 10, 4,  "-", kColorWhite, &lv_font_montserrat_16);
-        node_types_[i] = MakeLabel(card, 10, 28, "-", kColorMuted,  &lv_font_montserrat_16);
-        node_ages_[i]  = MakeLabel(card, 10, 50, "-", kColorMuted,  &lv_font_montserrat_16);
-    }
-}
-
-// ================ 渲染：切屏 + 更新动态数据 ================
+// ================ 渲染：更新动态数据 ================
 
 void DisplayService::Render()
 {
-    // 切屏：状态页 ↔ 节点列表页（每秒切换，便于观察两侧状态）
-    // 没有节点时只显示状态页，避免空白节点页无意义切换
-    bool has_nodes = registry_ && registry_->Count() > 0;
-    if (has_nodes) {
-        if (showing_nodes_) {
-            lv_screen_load(scr_status_);
-            showing_nodes_ = false;
-        } else {
-            lv_screen_load(scr_nodes_);
-            showing_nodes_ = true;
-        }
-    } else if (showing_nodes_) {
-        lv_screen_load(scr_status_);
-        showing_nodes_ = false;
-    }
-
     // ---- 状态页：填充数据 ----
     bool wifi_online  = wifi_ && wifi_->IsOnline();
     bool provision    = wifi_ && wifi_->IsProvisioning();
@@ -438,28 +395,6 @@ void DisplayService::Render()
         char buf[24];
         std::snprintf(buf, sizeof(buf), "uptime %02d:%02d:%02d", h, m, s);
         lv_label_set_text(uptime_label_, buf);
-    }
-
-    // ---- 节点列表页：填充数据 ----
-    if (has_nodes) {
-        for (int i = 0; i < kMaxNodesShown; ++i) {
-            if (i < registry_->Count()) {
-                auto info = registry_->GetByIndex(i);
-                if (node_ids_[i])   lv_label_set_text(node_ids_[i],   info.node_id.c_str());
-                if (node_types_[i]) lv_label_set_text(node_types_[i], info.sensor_summary.c_str());
-                if (node_ages_[i]) {
-                    int64_t age_s = (esp_timer_get_time() - info.last_seen_us) / 1000000;
-                    char buf[24];
-                    std::snprintf(buf, sizeof(buf), "%llds ago",
-                                  static_cast<long long>(age_s));
-                    lv_label_set_text(node_ages_[i], buf);
-                }
-            } else {
-                if (node_ids_[i])   lv_label_set_text(node_ids_[i],   "-");
-                if (node_types_[i]) lv_label_set_text(node_types_[i], "");
-                if (node_ages_[i])  lv_label_set_text(node_ages_[i],  "");
-            }
-        }
     }
 }
 

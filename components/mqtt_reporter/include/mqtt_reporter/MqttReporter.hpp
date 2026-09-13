@@ -62,6 +62,8 @@ private:
     void PublishInfo();
     void PublishSensorData(const SensorPipeline::SensorData& data);
     void PublishNodeRegister(const SensorPipeline::NodeRegistered& reg);
+    // 按原始 node_id + 能力清单发布 register（MQTT 重连后补发持久化节点时使用）
+    void PublishNodeRegisterRaw(const char* node_id, const char* capability_json);
 
     AppConfig* config_ = nullptr;
     NodeRegistry* registry_ = nullptr;

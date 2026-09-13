@@ -1,13 +1,13 @@
-// display_service 组件：JD9853 SPI 屏驱动（2.01" 240x296）+ LVGL UI（状态页 / 节点列表页）
+// display_service 组件：JD9853 SPI 屏驱动（2.01" 240x296）+ LVGL UI（状态页）
 //
 // 与 esp32-broker 的差异：
 //   - 把 Display（硬件）+ StatusUi（UI）合并为单一组件，避免文件爆炸
 //   - 不再注入 Broker 指针，改为注入 MqttReporter（hub 是 MQTT 客户端）
-//   - 第二屏从「配网页」改为「节点列表页」（配网由 wifi_provider 的 portal.html 完成）
 //
 // 数据流：
 //   DisplayService 通过 getter 读取 WifiManager/BleCentral/MqttReporter/NodeRegistry 状态，
-//   每 1 秒切屏并刷新文本/颜色。BLE/MQTT 数据变化由各自组件直接写 registry，这里只读取。
+//   每 1 秒刷新一次文本/颜色。BLE/MQTT 数据变化由各自组件直接写 registry，这里只读取。
+// 节点详情/选择页暂不实现：后续加物理按钮后，由按钮事件手动切换页面再补 BuildNodesScreen。
 #pragma once
 
 #include <cstdint>
@@ -50,7 +50,7 @@ public:
     // 绑定状态来源（必须在 Start 前调用，使 Render 能读到实时状态）
     void Bind(WifiManager* wifi, BleCentral* ble, MqttReporter* reporter, NodeRegistry* registry);
 
-    // 构建两块 LVGL 屏幕（状态页 + 节点列表页）并启动渲染任务（内部 xTaskCreate）
+    // 构建状态页 LVGL 屏幕并启动渲染任务（内部 xTaskCreate）
     void Start();
 
     // 逻辑分辨率（横屏）：面板原生 GRAM 为 240x320、可视区 240x296，
@@ -65,8 +65,7 @@ private:
     void Run();
     void BuildScreens();
     void BuildStatusScreen(lv_obj_t* scr);    // 中继状态：Wi-Fi/MQTT/节点数
-    void BuildNodesScreen(lv_obj_t* scr);     // 已配对节点列表（最多 4 条）
-    void Render();                            // LVGL 锁内：切屏 + 更新动态数据
+    void Render();                            // LVGL 锁内：更新状态页动态数据
 
     esp_lcd_panel_handle_t panel_ = nullptr;
     lv_display_t* lvgl_disp_      = nullptr;
@@ -78,8 +77,6 @@ private:
     TaskHandle_t task_     = nullptr;
 
     lv_obj_t* scr_status_ = nullptr;
-    lv_obj_t* scr_nodes_  = nullptr;
-    bool showing_nodes_   = false;
 
     // 状态页动态控件
     lv_obj_t* badge_         = nullptr;
@@ -89,13 +86,6 @@ private:
     lv_obj_t* mqtt_state_    = nullptr;
     lv_obj_t* node_count_    = nullptr;
     lv_obj_t* uptime_label_  = nullptr;
-
-    // 节点列表页动态控件（最多 4 个节点）
-    static constexpr int kMaxNodesShown = 4;
-    lv_obj_t* node_rows_[kMaxNodesShown] = {};
-    lv_obj_t* node_ids_[kMaxNodesShown]  = {};
-    lv_obj_t* node_types_[kMaxNodesShown] = {};
-    lv_obj_t* node_ages_[kMaxNodesShown]  = {};
 };
 
 } // namespace esp32hub

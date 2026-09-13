@@ -87,10 +87,14 @@ esp_err_t NodeRegistry::LoadFromFile()
             if (!cJSON_IsObject(item)) continue;
             cJSON* id = cJSON_GetObjectItem(item, "node_id");
             cJSON* sm  = cJSON_GetObjectItem(item, "sensor_summary");
+            cJSON* cap = cJSON_GetObjectItem(item, "capability");
             if (cJSON_IsString(id) && id->valuestring[0]) {
                 nodes_[count_].node_id = id->valuestring;
                 if (cJSON_IsString(sm)) {
                     nodes_[count_].sensor_summary = sm->valuestring;
+                }
+                if (cJSON_IsString(cap)) {
+                    nodes_[count_].capability = cap->valuestring;
                 }
                 nodes_[count_].online = false; // 启动时所有节点离线
                 nodes_[count_].last_seen_us = 0;
@@ -110,6 +114,7 @@ esp_err_t NodeRegistry::SaveToFile() const
         cJSON* item = cJSON_CreateObject();
         cJSON_AddStringToObject(item, "node_id", nodes_[i].node_id.c_str());
         cJSON_AddStringToObject(item, "sensor_summary", nodes_[i].sensor_summary.c_str());
+        cJSON_AddStringToObject(item, "capability", nodes_[i].capability.c_str());
         cJSON_AddItemToArray(arr, item);
     }
     char* str = cJSON_PrintUnformatted(root);
@@ -178,6 +183,7 @@ esp_err_t NodeRegistry::RegisterNode(const std::string& node_id, const std::stri
     for (int i = 0; i < count_; ++i) {
         if (nodes_[i].node_id == node_id) {
             nodes_[i].sensor_summary = summary;
+            nodes_[i].capability = capability_json;
             nodes_[i].online = true;
             nodes_[i].last_seen_us = esp_timer_get_time();
             SaveToFile();
@@ -191,6 +197,7 @@ esp_err_t NodeRegistry::RegisterNode(const std::string& node_id, const std::stri
     }
     nodes_[count_].node_id = node_id;
     nodes_[count_].sensor_summary = summary;
+    nodes_[count_].capability = capability_json;
     nodes_[count_].online = true;
     nodes_[count_].last_seen_us = esp_timer_get_time();
     ++count_;

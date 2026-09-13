@@ -52,8 +52,10 @@ static const ble_uuid128_t kChrNotifyUuid =
 static constexpr int32_t kScanDurationMs = 10000;
 // 连接超时
 static constexpr int32_t kConnectTimeoutMs = 10000;
-// 首选 MTU
-static constexpr uint16_t kPreferredMtu = 256;
+// 首选 MTU：必须 >= 512。node 的 hello_ack 能力清单约 305 字节，
+// 256 MTU 有效载荷仅 253 字节会被截断，导致能力解析失败、节点无法注册。
+// 此值同时覆盖 Kconfig 的 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU（运行时 set_preferred_mtu 优先级更高）。
+static constexpr uint16_t kPreferredMtu = 512;
 
 BleCentral::~BleCentral()
 {
@@ -95,7 +97,10 @@ esp_err_t BleCentral::Init(AppConfig* config, NodeRegistry* registry, SensorPipe
         ESP_LOGE(TAG, "create ble_central task failed, free heap %u B",
                  (unsigned)esp_get_free_heap_size());
     }
-    ESP_LOGI(TAG, "ble central initialized");
+    // 打印协议栈实际生效的 ATT preferred MTU（必须与 node 端一致 >=512，
+    // 否则协商取双方最小值，hello_ack 会被截断）
+    ESP_LOGI(TAG, "ble central initialized (att preferred mtu=%d)",
+             static_cast<int>(ble_att_preferred_mtu()));
     return ESP_OK;
 }
 

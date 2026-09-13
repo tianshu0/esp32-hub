@@ -26,6 +26,10 @@ CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
 # 最多同时连接 4 个 sensor node
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=4
+# ATT MTU 提到 512：节点握手 hello_ack 带完整能力清单（types+各传感器 format，
+# 约 290 字节），默认 256 时单包 payload 上限 253，NimBLE 会静默截断 JSON。
+# mbuf 块仍保持 256，大包走 mbuf 链，不多占 hub 堆。
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=512
 
 # ESP32-C3 单核且 IRAM 有限，Wi-Fi 与 BLE 同时启用时容易溢出：
 # 关闭 Wi-Fi 的 IRAM 优化，把收发路径代码放回 Flash，换取 IRAM 空间

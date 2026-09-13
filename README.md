@@ -1,18 +1,18 @@
 # esp32-hub
 
-带屏幕的 ESP32 **中继枢纽**固件：负责 Wi-Fi 配网、连接 `esp32-broker`（MQTT Broker）、通过蓝牙自动发现并配对 `esp32-node` 传感器节点，接收传感器数据后经 MQTT 上报。屏幕实时显示中继状态与已配对节点列表。
+带屏幕的 ESP32 **中继枢纽**固件：负责 Wi-Fi 配网、连接 `esp32-broker`（MQTT Broker）、通过蓝牙自动发现并配对 `esp32-node` 传感器节点，接收传感器数据后经 MQTT 上报。屏幕实时显示中继状态（节点数），节点详情/选择页预留由后续物理按钮切换。
 
 ```
 esp32-node(传感器) ──BLE──▶ esp32-hub ──MQTT──▶ esp32-broker
                                 │
-                              屏幕(状态/节点列表)
+                              屏幕(状态页)
 ```
 
 ## 角色定位
 
 - **上行**：作为 MQTT 客户端连接 `esp32-broker.local:1883`，按主题上报中继状态与传感器数据。
 - **下行**：作为 BLE 中心（Central）扫描/广播，与 `esp32-node` 进行 GATT 连接、协议握手、数据接收。
-- **本地展示**：屏幕显示当前中继 ID、Wi-Fi 状态、MQTT 连接状态、已配对节点数量及列表。
+- **本地展示**：屏幕显示当前中继 ID、Wi-Fi 状态、MQTT 连接状态、已配对节点数量。
 
 ## 为什么是当前的项目结构
 
@@ -24,7 +24,7 @@ esp32-hub/
 ├── components/
 │   ├── app_config/         # NVS 配置（Wi-Fi 凭据、中继 ID、broker 地址、屏幕参数）
 │   ├── wifi_provider/      # STA/AP 配网状态机（复用 broker 的 Captive Portal 方案）
-│   ├── display_service/    # 屏幕驱动 + UI 渲染（状态页 / 节点列表页）
+│   ├── display_service/    # 屏幕驱动 + UI 渲染（状态页；节点选择页预留按钮切换）
 │   ├── ble_central/        # BLE 扫描、广播、GATT 连接、配对握手
 │   ├── node_registry/      # 已配对节点表（持久化 + 内存索引）
 │   ├── sensor_pipeline/    # 蓝牙收数据 → 协议解析 → 交给 mqtt_reporter
@@ -39,7 +39,7 @@ esp32-hub/
 | :--- | :--- | :--- |
 | `app_config` | 跨重启需要保留的配置（凭据、relay_id、broker host、配对表备份） | NVS key 集中管理，避免散落 |
 | `wifi_provider` | STA 连不上自动开 AP 配网 → 保存凭据重连 | 状态机最复杂，独立可复用 broker 的 Portal 方案 |
-| `display_service` | 屏幕驱动 + 状态/列表 UI 渲染 | 屏幕型号可换（JD9853 / SSD1306），独立后改驱动只动本组件 |
+| `display_service` | 屏幕驱动 + 状态页 UI 渲染 | 屏幕型号可换（JD9853 / SSD1306），独立后改驱动只动本组件 |
 | `ble_central` | 扫描、广播、GATT 连接、握手协议 | BLE 协议栈独立，握手协议可单独演进 |
 | `node_registry` | 已配对节点表（node_id → 传感器类型/最后在线时间） | 配对表需持久化，独立避免与 BLE 协议耦合 |
 | `sensor_pipeline` | 蓝牙 GATT 收数据 → 协议解析 → 数据结构化 | 传感器协议可扩展，解析与传输分离 |
